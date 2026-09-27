@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Game Dinosaurus</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: #0d141c;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+  #wrap {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  #game {
+    width: min(100vw, calc(100vh * 800 / 300));
+    height: min(100vh, calc(100vw * 300 / 800));
+    display: block;
+    touch-action: none;
+    cursor: pointer;
+    background: #cfeeff;
+  }
+  .hint { display: none; }
+  #touchControls {
+    display: none;
+    position: fixed;
+    bottom: max(20px, env(safe-area-inset-bottom));
+    left: 20px; right: 20px;
+    gap: 12px;
+    z-index: 20;
+  }
+  #touchControls button {
+    flex: 1; padding: 18px; font-size: 17px; border-radius: 14px;
+    border: none; background: rgba(42,54,68,0.88); color: #cfd8e3;
+    font-weight: 700; user-select: none; touch-action: none;
+    font-family: inherit;
+    box-shadow: 0 4px 0 rgba(0,0,0,.35);
+  }
+  #touchControls button:active {
+    background: #3a4a5c; transform: translateY(2px);
+  }
+  #muteBtn {
+    position: fixed; top: 12px; right: 12px; z-index: 30;
+    background: rgba(42,54,68,0.88); color: #cfd8e3; border: none;
+    width: 42px; height: 42px; border-radius: 50%;
+    font-size: 18px; cursor: pointer; font-family: inherit;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  }
+  #muteBtn:active { transform: scale(.94); }
+  @media (hover: none) and (pointer: coarse) {
+    #touchControls { display: flex; }
+  }
+</style>
+</head>
+<body>
+<button id="muteBtn" title="Suara ON/OFF">🔊</button>
+
+<div id="wrap">
+  <canvas id="game"></canvas>
+</div>
+<div id="touchControls">
+  <button id="btnJump">⬆ LOMPAT</button>
+  <button id="btnDuck">⬇ MERUNDUK</button>
+</div>
+
+<script>
+/* =========================================================
+   ⚙️  CONFIG — GANTI NAMA FILE DI SINI SAJA
+   ========================================================= */
+const CONFIG = {
+  /* ---------- GAMBAR (taruh di folder assets/images/) ---------- */
+  images: {
+    dinoIdle   : 'assets/images/dino-idle.png',
+    dinoRun1   : 'assets/images/dino-idle.png',
+    dinoRun2   : 'assets/images/dino-idle.png',
+    dinoDuck   : 'assets/images/dino-idle.png',
+    dinoDead   : 'assets/images/dino-idle.png',
+    treeSmall  : 'assets/images/tree-1.png',
+    treeBig    : 'assets/images/tree-2.png',
+    treeGroup  : 'assets/images/tree-group.png',
+    bird1      : 'assets/images/bird-1.png',
+    bird2      : 'assets/images/bird-2.png',
+    cloud      : 'assets/images/cloud.png',
+    ground     : 'assets/images/ground.png'
+  },
+
+  /* ---------- AUDIO (taruh di folder assets/audio/) ---------- */
+  audio: {
+    jump     : 'assets/images/audio/jump.mp3',
+    gameover : 'assets/images/audio/gameover.mp3',
+    bgm      : 'assets/audio/bgm.mp3'
+  },
+
+  /* ---------- PENGATURAN AUDIO ---------- */
+  audioSettings: {
+    jumpVolume     : 0.6,
+    gameoverVolume : 0.8,
+    bgmVolume      : 0.35,
+    bgmLoop        : true
+  },
+
+  /* ---------- UKURAN GAMBAR DI GAME (px) ---------- */
+  sizes: {
+    dinoStanding : { w: 100, h: 85 },
+    dinoDucking  : { w: 62,  h: 32 },
+    treeSmall    : { w: 50,  h: 42 },
+    treeBig      : { w: 40,  h: 55 },
+    treeGroup    : { w: 55,  h: 55 },
+    bird         : { w: 48,  h: 34 },
+    cloud        : { w: 70,  h: 34 }
+  }
+};
+/* ========================================================= */
+
+(() => {
+'use strict';
+
+/* =====================================================
+   CANVAS & KONSTANTA
+===================================================== */
+const canvas = document.getElementById('game');
+const ctx    = canvas.getContext('2d');
+
+const W = 800, H = 300;
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+canvas.width  = W * DPR;
+canvas.height = H * DPR;
+ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+const GROUND_Y  = 246;
+const GRAVITY   = 1.0;
+const JUMP_V    = -22;
+const MAX_FALL  = 32;
+const SPEED_MIN = 8;
+const SPEED_MAX = 18;
+const ACCEL     = 0.0028;
+
+const STATE = { LOADING: -1, READY: 0, PLAYING: 1, OVER: 2 };
+
+const COL = {
+  text:     '#54646f',
+  textSoft: '#a3b0bb'
+};
+
+/* =====================================================
+   UTIL
+===================================================== */
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+}
+const rand = (a, b) => a + Math.random() * (b - a);
+const pad5 = n => String(Math.max(0, Math.floor(n))).padStart(5, '0');
+
+/* =====================================================
+   LOADER ASET (GAMBAR + AUDIO)
+===================================================== */
+const IMG = {};
+const SND = {};
+let assetsLoaded = 0;
+let assetsTotal  = 0;
+let readyToStart = false;
+
+function countAssets() {
+  let n = 0;
+  for (const k in CONFIG.images) if (CONFIG.images[k]) n++;
+  for (const k in CONFIG.audio)  if (CONFIG.audio[k])  n++;
+  return n;
+}
+
+function loadImage(key, src) {
+  const img = new Image();
+  img.onload  = () => { IMG[key] = img; assetDone(); };
+  img.onerror = () => { console.warn('❌ Gagal memuat gambar:', src); assetDone(); };
+  img.src = src;
+}
+
+function loadSound(key, src) {
+  const audio = new Audio();
+  audio.preload = 'auto';
+  audio.addEventListener('canplaythrough', () => { SND[key] = audio; assetDone(); }, { once: true });
+  audio.addEventListener('error', () => { console.warn('❌ Gagal memuat audio:', src); assetDone(); }, { once: true });
+  audio.src = src;
+  setTimeout(() => {
+    if (!SND[key]) { SND[key] = audio; assetDone(); }
+  }, 4000);
+}
+
+function assetDone() {
+  assetsLoaded++;
+  if (assetsLoaded >= assetsTotal) readyToStart = true;
+}
+
+function loadAllAssets() {
+  assetsTotal = countAssets();
+  if (assetsTotal === 0) { readyToStart = true; return; }
+
+  for (const k in CONFIG.images) {
+    if (CONFIG.images[k]) loadImage(k, CONFIG.images[k]);
+  }
+  for (const k in CONFIG.audio) {
+    if (CONFIG.audio[k]) loadSound(k, CONFIG.audio[k]);
+  }
+}
+
+/* =====================================================
+   AUDIO MANAGER
+===================================================== */
+let audioMuted = false;
+
+function playSound(name, volume) {
+  if (audioMuted) return;
+  const src = SND[name];
+  if (!src) return;
+  try {
+    const s = src.cloneNode();
+    s.volume = volume;
+    s.play().catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+
+let bgmAudio = null;
+function startBGM() {
+  if (audioMuted) return;
+  const src = SND.bgm;
+  if (!src) return;
+  if (bgmAudio && !bgmAudio.paused) return;
+
+  bgmAudio = src;
+  bgmAudio.loop   = CONFIG.audioSettings.bgmLoop;
+  bgmAudio.volume = CONFIG.audioSettings.bgmVolume;
+  bgmAudio.play().catch(() => {});
+}
+function stopBGM() {
+  if (bgmAudio) { bgmAudio.pause(); bgmAudio.currentTime = 0; }
+}
+
+document.getElementById('muteBtn').addEventListener('click', (e) => {
+  audioMuted = !audioMuted;
+  e.currentTarget.textContent = audioMuted ? '🔇' : '🔊';
+  if (audioMuted) stopBGM();
+  else if (state === STATE.PLAYING) startBGM();
+});
+
+/* =====================================================
+   STATE GAME
+===================================================== */
+let state      = STATE.LOADING;
+let speed      = SPEED_MIN;
+let distance   = 0;
+let score      = 0;
+let highScore  = Number(localStorage.getItem('dinoHiScore')) || 0;
+let obstacles  = [];
+let clouds     = [];
+let pebbles    = [];
+let spawnDist  = 0;
+let nextSpawn  = 560;
+let cloudTimer = 0;
+let jumpHeld   = false;
+let gameOverAt = 0;
+let lastTime   = 0;
+
+const dino = {
+  x: 62, y: GROUND_Y - CONFIG.sizes.dinoStanding.h,
+  w: CONFIG.sizes.dinoStanding.w,
+  h: CONFIG.sizes.dinoStanding.h,
+  vy: 0, onGround: true, ducking: false,
+  legFrame: 0, legTimer: 0
+};
+
+const skyGrad = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+skyGrad.addColorStop(0,   '#6cb6e3');
+skyGrad.addColorStop(0.6, '#a9dcf3');
+skyGrad.addColorStop(1,   '#dff2fb');
+
+/* =====================================================
+   SCENERY
+===================================================== */
+function initScenery() {
+  clouds = [];
+  for (let i = 0; i < 4; i++) {
+    clouds.push({
+      x: rand(0, W), y: rand(28, 115),
+      s: rand(0.6, 1.15), f: rand(0.25, 0.5)
+    });
+  }
+  pebbles = [];
+  for (let i = 0; i < 28; i++) {
+    pebbles.push({
+      x: rand(0, W),
+      y: GROUND_Y + rand(9, 45),
+      w: rand(3, 14),
+      h: rand(2, 3)
+    });
+  }
+}
+initScenery();
+
+/* =====================================================
+   RESET / MULAI
+===================================================== */
+function resetGame() {
+  state      = STATE.PLAYING;
+  speed      = SPEED_MIN;
+  distance   = 0;
+  score      = 0;
+  obstacles  = [];
+  spawnDist  = 0;
+  nextSpawn  = 560;
+  cloudTimer = 0;
+  jumpHeld   = false;
+
+  dino.w = CONFIG.sizes.dinoStanding.w;
+  dino.h = CONFIG.sizes.dinoStanding.h;
+  dino.y = GROUND_Y - dino.h;
+  dino.vy = 0;
+  dino.onGround = true;
+  dino.ducking  = false;
+  dino.legFrame = 0;
+  dino.legTimer = 0;
+
+  startBGM();
+}
+
+function tryStart() {
+  if (!readyToStart) return;
+  if (state === STATE.OVER && performance.now() - gameOverAt < 450) return;
+  resetGame();
+}
+
+/* =====================================================
+   AKSI DINO
+===================================================== */
+function jump() {
+  if (!dino.onGround) return;
+  if (dino.ducking) setDucking(false);
+  dino.vy = JUMP_V;
+  dino.onGround = false;
+  jumpHeld = true;
+  playSound('jump', CONFIG.audioSettings.jumpVolume);
+}
+
+function setDucking(v) {
+  if (dino.ducking === v) return;
+  if (v && !dino.onGround) return;
+  dino.ducking = v;
+  dino.w = v ? CONFIG.sizes.dinoDucking.w : CONFIG.sizes.dinoStanding.w;
+  dino.h = v ? CONFIG.sizes.dinoDucking.h : CONFIG.sizes.dinoStanding.h;
+  dino.y = GROUND_Y - dino.h;
+}
+
+/* =====================================================
+   SPAWN OBSTACLE
+===================================================== */
+function scheduleNextSpawn() {
+  const minGap = 240 + speed * 24;
+  nextSpawn = minGap + Math.random() * 250;
+}
+
+function spawnObstacle() {
+  if (score > 250 && Math.random() < 0.22) {
+    obstacles.push({
+      type: 'bird',
+      x: W + 24,
+      y: GROUND_Y - 62,
+      w: CONFIG.sizes.bird.w,
+      h: CONFIG.sizes.bird.h,
+      frame: 0, frameTimer: 0
+    });
+    return;
+  }
+
+  const roll = Math.random();
+  let kind;
+  if (score > 80 && roll < 0.30)      kind = 'big';
+  else if (roll > 0.85 && score > 40) kind = 'group';
+  else                                 kind = 'small';
+
+  const sz = kind === 'big'   ? CONFIG.sizes.treeBig
+           : kind === 'group' ? CONFIG.sizes.treeGroup
+           :                    CONFIG.sizes.treeSmall;
+
+  obstacles.push({
+    type: 'tree',
+    kind,
+    x: W + 24,
+    y: GROUND_Y - sz.h,
+    w: sz.w,
+    h: sz.h
+  });
+}
+
+/* =====================================================
+   UPDATE
+===================================================== */
+function update(dt) {
+  if (state === STATE.PLAYING) {
+    speed = Math.min(SPEED_MAX, speed + ACCEL * dt);
+    distance += speed * dt;
+    score = Math.floor(distance / 22);
+    if (score > highScore) highScore = score;
+  }
+
+  const worldSpeed = state === STATE.PLAYING ? speed
+                   : state === STATE.READY   ? 1.6
+                   : 0;
+
+  if (!dino.onGround) {
+    if (!jumpHeld && dino.vy < -6) dino.vy = -6;
+    dino.vy += GRAVITY * dt;
+    if (dino.vy > MAX_FALL) dino.vy = MAX_FALL;
+    dino.y += dino.vy * dt;
+
+    const floor = GROUND_Y - dino.h;
+    if (dino.y >= floor) {
+      dino.y = floor;
+      dino.vy = 0;
+      dino.onGround = true;
+    }
+  } else {
+    dino.y = GROUND_Y - dino.h;
+  }
+
+  if (dino.onGround && state === STATE.PLAYING) {
+    dino.legTimer += dt;
+    if (dino.legTimer > 6) {
+      dino.legTimer = 0;
+      dino.legFrame ^= 1;
+    }
+  }
+
+  for (const c of clouds) {
+    c.x -= worldSpeed * c.f * dt;
+    if (c.x < -120) {
+      c.x = W + rand(30, 260);
+      c.y = rand(28, 115);
+      c.s = rand(0.6, 1.15);
+      c.f = rand(0.25, 0.5);
+    }
+  }
+
+  for (const p of pebbles) {
+    p.x -= worldSpeed * dt;
+    if (p.x < -20) {
+      p.x = W + rand(0, 120);
+      p.y = GROUND_Y + rand(9, 45);
+      p.w = rand(3, 14);
+    }
+  }
+
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    o.x -= worldSpeed * dt;
+    if (o.type === 'bird') {
+      o.frameTimer += dt;
+      if (o.frameTimer > 9) { o.frameTimer = 0; o.frame ^= 1; }
+    }
+    if (o.x + o.w < -20) obstacles.splice(i, 1);
+  }
+
+  if (state === STATE.PLAYING) {
+    spawnDist += speed * dt;
+    if (spawnDist >= nextSpawn) {
+      spawnDist = 0;
+      scheduleNextSpawn();
+      spawnObstacle();
+    }
+  }
+
+  if (state === STATE.PLAYING && checkCollision()) {
+    state = STATE.OVER;
+    gameOverAt = performance.now();
+    localStorage.setItem('dinoHiScore', String(Math.floor(highScore)));
+    playSound('gameover', CONFIG.audioSettings.gameoverVolume);
+    stopBGM();
+  }
+}
+
+/* =====================================================
+   TABRAKAN
+===================================================== */
+function checkCollision() {
+  const d = {
+    x: dino.x + 6,
+    y: dino.y + 6,
+    w: dino.w - 12,
+    h: dino.h - 8
+  };
+
+  for (const o of obstacles) {
+    const ox = o.x + 4;
+    const oy = o.y + 4;
+    const ow = o.w - 8;
+    const oh = o.h - 8;
+
+    if (d.x < ox + ow && d.x + d.w > ox &&
+        d.y < oy + oh && d.y + d.h > oy) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* =====================================================
+   GAMBAR ASET
+===================================================== */
+function drawAsset(img, x, y, w, h) {
+  if (!img) return false;
+  ctx.drawImage(img, x, y, w, h);
+  return true;
+}
+
+function drawCloudImg(x, y, s) {
+  const sz = CONFIG.sizes.cloud;
+  const w = sz.w * s, h = sz.h * s;
+  if (!drawAsset(IMG.cloud, x, y, w, h)) {
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.beginPath();
+    ctx.arc(x + w * 0.3, y + h * 0.6, h * 0.4, 0, Math.PI * 2);
+    ctx.arc(x + w * 0.6, y + h * 0.4, h * 0.5, 0, Math.PI * 2);
+    ctx.arc(x + w * 0.8, y + h * 0.65, h * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawTree(o) {
+  let img = null;
+  if (o.kind === 'big')        img = IMG.treeBig;
+  else if (o.kind === 'group') img = IMG.treeGroup;
+  else                         img = IMG.treeSmall;
+
+  if (!drawAsset(img, o.x, o.y, o.w, o.h)) {
+    ctx.fillStyle = '#2f7d46';
+    roundRect(o.x + o.w * 0.25, o.y, o.w * 0.5, o.h, o.w * 0.2);
+    ctx.fill();
+    roundRect(o.x, o.y + o.h * 0.4, o.w * 0.3, o.h * 0.5, o.w * 0.15);
+    ctx.fill();
+    roundRect(o.x + o.w * 0.7, o.y + o.h * 0.2, o.w * 0.3, o.h * 0.55, o.w * 0.15);
+    ctx.fill();
+  }
+}
+
+function drawBird(o) {
+  const img = o.frame === 0 ? IMG.bird1 : IMG.bird2;
+  if (!drawAsset(img, o.x, o.y, o.w, o.h)) {
+    ctx.fillStyle = '#42566b';
+    ctx.beginPath();
+    ctx.moveTo(o.x, o.y + o.h / 2);
+    ctx.lineTo(o.x + o.w, o.y);
+    ctx.lineTo(o.x + o.w * 0.7, o.y + o.h / 2);
+    ctx.lineTo(o.x + o.w, o.y + o.h);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+function drawDino() {
+  let img;
+  if (state === STATE.OVER && IMG.dinoDead) {
+    img = IMG.dinoDead;
+  } else if (dino.ducking) {
+    img = IMG.dinoDuck;
+  } else if (state === STATE.PLAYING && !dino.onGround) {
+    img = IMG.dinoIdle;
+  } else if (state === STATE.PLAYING) {
+    img = dino.legFrame === 0 ? IMG.dinoRun1 : IMG.dinoRun2;
+  } else {
+    img = IMG.dinoIdle;
+  }
+
+  if (!drawAsset(img, dino.x, dino.y, dino.w, dino.h)) {
+    ctx.fillStyle = '#4c9a63';
+    roundRect(dino.x, dino.y, dino.w, dino.h, 6);
+    ctx.fill();
+  }
+}
+
+/* =====================================================
+   RENDER
+===================================================== */
+function render() {
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, W, GROUND_Y);
+
+  ctx.fillStyle = 'rgba(255,236,168,0.45)';
+  ctx.beginPath(); ctx.arc(W - 96, 62, 50, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,243,190,0.95)';
+  ctx.beginPath(); ctx.arc(W - 96, 62, 33, 0, Math.PI * 2); ctx.fill();
+
+  for (const c of clouds) drawCloudImg(c.x, c.y, c.s);
+
+  if (IMG.ground) {
+    const gw = IMG.ground.width;
+    const gh = H - GROUND_Y;
+    const offset = (distance % gw);
+    for (let x = -offset; x < W; x += gw) {
+      ctx.drawImage(IMG.ground, x, GROUND_Y, gw, gh);
+    }
+  } else {
+    ctx.fillStyle = '#eadfc6';
+    ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+    ctx.fillStyle = '#c9b48d';
+    ctx.fillRect(0, GROUND_Y, W, 3);
+    ctx.fillStyle = '#d3c29e';
+    for (const p of pebbles) ctx.fillRect(p.x, p.y, p.w, p.h);
+  }
+
+  for (const o of obstacles) {
+    if (o.type === 'bird') drawBird(o);
+    else                   drawTree(o);
+  }
+
+  drawDino();
+
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'top';
+  ctx.font = '700 20px "Courier New", ui-monospace, monospace';
+
+  const scoreStr = pad5(score);
+  ctx.fillStyle = COL.text;
+  ctx.fillText(scoreStr, W - 26, 24);
+
+  if (highScore > 0) {
+    const sw = ctx.measureText(scoreStr).width;
+    ctx.fillStyle = COL.textSoft;
+    ctx.fillText('HI ' + pad5(highScore), W - 26 - sw - 24, 24);
+  }
+
+  if (state === STATE.LOADING) drawLoadingScreen();
+  if (state === STATE.READY)   drawReadyScreen();
+  if (state === STATE.OVER)    drawOverScreen();
+}
+
+function drawLoadingScreen() {
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(60,74,86,0.9)';
+  ctx.font = '700 22px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText('Memuat aset...', W / 2, 108);
+
+  const pct = assetsTotal ? assetsLoaded / assetsTotal : 1;
+  const bw = 260, bh = 8;
+  ctx.fillStyle = 'rgba(60,74,86,0.25)';
+  roundRect(W / 2 - bw / 2, 138, bw, bh, bh / 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#4c9a63';
+  roundRect(W / 2 - bw / 2, 138, bw * pct, bh, bh / 2);
+  ctx.fill();
+}
+
+function drawReadyScreen() {
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.fillStyle = 'rgba(60,74,86,0.92)';
+  ctx.font = '700 24px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText('TEKAN SPASI ATAU KLIK UNTUK MULAI', W / 2, 108);
+
+  ctx.fillStyle = 'rgba(80,96,110,0.55)';
+  ctx.font = '600 14px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText('Hindari pohon  •  Merunduk untuk menghindari burung', W / 2, 142);
+}
+
+function drawOverScreen() {
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.fillStyle = '#37474f';
+  ctx.font = '800 42px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText('GAME OVER', W / 2, 92);
+
+  ctx.fillStyle = '#5c6f7e';
+  ctx.font = '600 16px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText('Tekan Spasi / Klik untuk mengulang', W / 2, 138);
+}
+
+/* =====================================================
+   GAME LOOP
+===================================================== */
+function loop(t) {
+  if (!lastTime) lastTime = t;
+  let dt = (t - lastTime) / 16.6667;
+  lastTime = t;
+  dt = Math.min(dt, 3);
+
+  if (state === STATE.LOADING && readyToStart) {
+    state = STATE.READY;
+  }
+
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* =====================================================
+   INPUT: KEYBOARD
+===================================================== */
+window.addEventListener('keydown', e => {
+  const k = e.code;
+
+  if (k === 'Space' || k === 'ArrowUp' || k === 'KeyW' || k === 'Enter') {
+    e.preventDefault();
+    if (state === STATE.PLAYING) jump();
+    else tryStart();
+  } else if (k === 'ArrowDown' || k === 'KeyS') {
+    e.preventDefault();
+    if (state === STATE.PLAYING) setDucking(true);
+  }
+});
+
+window.addEventListener('keyup', e => {
+  const k = e.code;
+  if (k === 'Space' || k === 'ArrowUp' || k === 'KeyW' || k === 'Enter') {
+    jumpHeld = false;
+  } else if (k === 'ArrowDown' || k === 'KeyS') {
+    if (state === STATE.PLAYING) setDucking(false);
+  }
+});
+
+/* =====================================================
+   INPUT: POINTER DI CANVAS
+===================================================== */
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (state === STATE.PLAYING) jump();
+  else tryStart();
+});
+canvas.addEventListener('pointerup',     () => { jumpHeld = false; });
+canvas.addEventListener('pointercancel', () => { jumpHeld = false; });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+/* =====================================================
+   INPUT: TOMBOL MOBILE
+===================================================== */
+const btnJump = document.getElementById('btnJump');
+const btnDuck = document.getElementById('btnDuck');
+
+btnJump.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (state === STATE.PLAYING) jump();
+  else tryStart();
+});
+btnJump.addEventListener('pointerup',     () => { jumpHeld = false; });
+btnJump.addEventListener('pointercancel', () => { jumpHeld = false; });
+
+btnDuck.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (state === STATE.PLAYING) setDucking(true);
+});
+const stopDuck = (e) => {
+  if (e) e.preventDefault();
+  if (state === STATE.PLAYING) setDucking(false);
+};
+btnDuck.addEventListener('pointerup',     stopDuck);
+btnDuck.addEventListener('pointercancel', stopDuck);
+btnDuck.addEventListener('pointerleave',  stopDuck);
+
+document.addEventListener('touchmove', e => {
+  if (e.target === canvas) e.preventDefault();
+}, { passive: false });
+
+/* =====================================================
+   START
+===================================================== */
+loadAllAssets();
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
