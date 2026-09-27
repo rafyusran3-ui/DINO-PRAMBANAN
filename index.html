@@ -2,34 +2,29 @@
 <html lang="id">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Game Dinosaurus</title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
     margin: 0; padding: 0;
     width: 100%; height: 100%;
-    background: #0d141c;
+    background: #cfeeff;
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     overflow: hidden;
-  }
-  #wrap {
-    width: 100vw;
-    height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
+    position: fixed;
+    overscroll-behavior: none;
+    touch-action: none;
   }
   #game {
-    width: min(100vw, calc(100vh * 800 / 300));
-    height: min(100vh, calc(100vw * 300 / 800));
     display: block;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw;
+    height: 100vh;
     touch-action: none;
     cursor: pointer;
-    background: #cfeeff;
   }
-  .hint { display: none; }
   #touchControls {
     display: none;
     position: fixed;
@@ -40,7 +35,7 @@
   }
   #touchControls button {
     flex: 1; padding: 18px; font-size: 17px; border-radius: 14px;
-    border: none; background: rgba(42,54,68,0.88); color: #cfd8e3;
+    border: none; background: rgba(42,54,68,0.88); color: #fff;
     font-weight: 700; user-select: none; touch-action: none;
     font-family: inherit;
     box-shadow: 0 4px 0 rgba(0,0,0,.35);
@@ -49,7 +44,8 @@
     background: #3a4a5c; transform: translateY(2px);
   }
   #muteBtn {
-    position: fixed; top: 12px; right: 12px; z-index: 30;
+    position: fixed; top: max(12px, env(safe-area-inset-top));
+    right: 12px; z-index: 30;
     background: rgba(42,54,68,0.88); color: #cfd8e3; border: none;
     width: 42px; height: 42px; border-radius: 50%;
     font-size: 18px; cursor: pointer; font-family: inherit;
@@ -63,10 +59,7 @@
 </head>
 <body>
 <button id="muteBtn" title="Suara ON/OFF">🔊</button>
-
-<div id="wrap">
-  <canvas id="game"></canvas>
-</div>
+<canvas id="game"></canvas>
 <div id="touchControls">
   <button id="btnJump">⬆ LOMPAT</button>
   <button id="btnDuck">⬇ MERUNDUK</button>
@@ -77,7 +70,6 @@
    ⚙️  CONFIG — GANTI NAMA FILE DI SINI SAJA
    ========================================================= */
 const CONFIG = {
-  /* ---------- GAMBAR (taruh di folder assets/images/) ---------- */
   images: {
     dinoIdle   : 'assets/images/dino-idle.png',
     dinoRun1   : 'assets/images/dino-idle.png',
@@ -92,23 +84,18 @@ const CONFIG = {
     cloud      : 'assets/images/cloud.png',
     ground     : 'assets/images/ground.png'
   },
-
-  /* ---------- AUDIO (taruh di folder assets/audio/) ---------- */
   audio: {
-    jump     : 'assets/images/audio/jump.mp3',
-    gameover : 'assets/images/audio/gameover.mp3',
+    jump     : 'assets/audio/jump.mp3',
+    gameover : 'assets/audio/gameover.mp3',
     bgm      : 'assets/audio/bgm.mp3'
   },
-
-  /* ---------- PENGATURAN AUDIO ---------- */
   audioSettings: {
     jumpVolume     : 0.6,
     gameoverVolume : 0.8,
     bgmVolume      : 0.35,
     bgmLoop        : true
   },
-
-  /* ---------- UKURAN GAMBAR DI GAME (px) ---------- */
+  /* Ukuran elemen game (dalam satuan "unit game" 800-based) */
   sizes: {
     dinoStanding : { w: 100, h: 85 },
     dinoDucking  : { w: 62,  h: 32 },
@@ -125,18 +112,56 @@ const CONFIG = {
 'use strict';
 
 /* =====================================================
-   CANVAS & KONSTANTA
+   CANVAS — ADAPTIF KE ORIENTASI LAYAR
 ===================================================== */
 const canvas = document.getElementById('game');
 const ctx    = canvas.getContext('2d');
 
-const W = 800, H = 300;
-const DPR = Math.min(window.devicePixelRatio || 1, 2);
-canvas.width  = W * DPR;
-canvas.height = H * DPR;
-ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+const BASE_W = 800;          // Lebar internal game (tetap)
+let W, H;                    // Ukuran internal canvas (dinamis)
+let GROUND_Y;                // Posisi tanah (dinamis)
+let GROUND_H = 60;           // Tinggi area tanah (px game)
 
-const GROUND_Y  = 246;
+function resizeCanvas() {
+  const DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+  // Lebar internal game selalu 800
+  W = BASE_W;
+
+  // Tinggi internal mengikuti rasio layar
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  H = W * (vh / vw);
+
+  // Batasi supaya tidak terlalu sempit (landscape ekstrem)
+  if (H < 300) H = 300;
+
+  // Batasi supaya tidak terlalu tinggi (portrait ekstrem)
+  if (H > 1600) H = 1600;
+
+  // Posisi tanah: 60 unit dari bawah
+  GROUND_Y = H - GROUND_H;
+
+  // Set ukuran canvas internal
+  canvas.width  = W * DPR;
+  canvas.height = H * DPR;
+
+  // Stretch canvas ke seluruh layar via CSS (aspect = sama, jadi tidak gepeng)
+  canvas.style.width  = vw + 'px';
+  canvas.style.height = vh + 'px';
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+window.addEventListener('orientationchange', () => {
+  setTimeout(resizeCanvas, 150);
+});
+
+/* =====================================================
+   KONSTANTA FISIKA
+===================================================== */
 const GRAVITY   = 1.0;
 const JUMP_V    = -22;
 const MAX_FALL  = 32;
@@ -168,7 +193,7 @@ const rand = (a, b) => a + Math.random() * (b - a);
 const pad5 = n => String(Math.max(0, Math.floor(n))).padStart(5, '0');
 
 /* =====================================================
-   LOADER ASET (GAMBAR + AUDIO)
+   LOADER ASET
 ===================================================== */
 const IMG = {};
 const SND = {};
@@ -209,7 +234,6 @@ function assetDone() {
 function loadAllAssets() {
   assetsTotal = countAssets();
   if (assetsTotal === 0) { readyToStart = true; return; }
-
   for (const k in CONFIG.images) {
     if (CONFIG.images[k]) loadImage(k, CONFIG.images[k]);
   }
@@ -231,7 +255,7 @@ function playSound(name, volume) {
     const s = src.cloneNode();
     s.volume = volume;
     s.play().catch(() => {});
-  } catch (e) { /* ignore */ }
+  } catch (e) {}
 }
 
 let bgmAudio = null;
@@ -240,7 +264,6 @@ function startBGM() {
   const src = SND.bgm;
   if (!src) return;
   if (bgmAudio && !bgmAudio.paused) return;
-
   bgmAudio = src;
   bgmAudio.loop   = CONFIG.audioSettings.bgmLoop;
   bgmAudio.volume = CONFIG.audioSettings.bgmVolume;
@@ -276,26 +299,23 @@ let gameOverAt = 0;
 let lastTime   = 0;
 
 const dino = {
-  x: 62, y: GROUND_Y - CONFIG.sizes.dinoStanding.h,
+  x: 62, y: 0,
   w: CONFIG.sizes.dinoStanding.w,
   h: CONFIG.sizes.dinoStanding.h,
   vy: 0, onGround: true, ducking: false,
   legFrame: 0, legTimer: 0
 };
-
-const skyGrad = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
-skyGrad.addColorStop(0,   '#6cb6e3');
-skyGrad.addColorStop(0.6, '#a9dcf3');
-skyGrad.addColorStop(1,   '#dff2fb');
+dino.y = GROUND_Y - dino.h;
 
 /* =====================================================
    SCENERY
 ===================================================== */
 function initScenery() {
   clouds = [];
+  const maxCloudY = Math.max(80, GROUND_Y * 0.45);
   for (let i = 0; i < 4; i++) {
     clouds.push({
-      x: rand(0, W), y: rand(28, 115),
+      x: rand(0, W), y: rand(28, maxCloudY),
       s: rand(0.6, 1.15), f: rand(0.25, 0.5)
     });
   }
@@ -303,7 +323,7 @@ function initScenery() {
   for (let i = 0; i < 28; i++) {
     pebbles.push({
       x: rand(0, W),
-      y: GROUND_Y + rand(9, 45),
+      y: GROUND_Y + rand(9, GROUND_H - 8),
       w: rand(3, 14),
       h: rand(2, 3)
     });
@@ -444,11 +464,12 @@ function update(dt) {
     }
   }
 
+  const maxCloudY = Math.max(80, GROUND_Y * 0.45);
   for (const c of clouds) {
     c.x -= worldSpeed * c.f * dt;
     if (c.x < -120) {
       c.x = W + rand(30, 260);
-      c.y = rand(28, 115);
+      c.y = rand(28, maxCloudY);
       c.s = rand(0.6, 1.15);
       c.f = rand(0.25, 0.5);
     }
@@ -458,7 +479,7 @@ function update(dt) {
     p.x -= worldSpeed * dt;
     if (p.x < -20) {
       p.x = W + rand(0, 120);
-      p.y = GROUND_Y + rand(9, 45);
+      p.y = GROUND_Y + rand(9, GROUND_H - 8);
       p.w = rand(3, 14);
     }
   }
@@ -594,16 +615,25 @@ function drawDino() {
    RENDER
 ===================================================== */
 function render() {
+  // Langit
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  skyGrad.addColorStop(0,   '#6cb6e3');
+  skyGrad.addColorStop(0.6, '#a9dcf3');
+  skyGrad.addColorStop(1,   '#dff2fb');
   ctx.fillStyle = skyGrad;
   ctx.fillRect(0, 0, W, GROUND_Y);
 
+  // Matahari (di atas, proporsional)
+  const sunY = Math.min(120, GROUND_Y * 0.18);
   ctx.fillStyle = 'rgba(255,236,168,0.45)';
-  ctx.beginPath(); ctx.arc(W - 96, 62, 50, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(W - 96, sunY, 50, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = 'rgba(255,243,190,0.95)';
-  ctx.beginPath(); ctx.arc(W - 96, 62, 33, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(W - 96, sunY, 33, 0, Math.PI * 2); ctx.fill();
 
+  // Awan
   for (const c of clouds) drawCloudImg(c.x, c.y, c.s);
 
+  // Tanah
   if (IMG.ground) {
     const gw = IMG.ground.width;
     const gh = H - GROUND_Y;
@@ -620,13 +650,16 @@ function render() {
     for (const p of pebbles) ctx.fillRect(p.x, p.y, p.w, p.h);
   }
 
+  // Obstacle
   for (const o of obstacles) {
     if (o.type === 'bird') drawBird(o);
     else                   drawTree(o);
   }
 
+  // Dino
   drawDino();
 
+  // HUD skor
   ctx.textAlign = 'right';
   ctx.textBaseline = 'top';
   ctx.font = '700 20px "Courier New", ui-monospace, monospace';
@@ -651,30 +684,31 @@ function drawLoadingScreen() {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(60,74,86,0.9)';
   ctx.font = '700 22px "Segoe UI", system-ui, sans-serif';
-  ctx.fillText('Memuat aset...', W / 2, 108);
+  ctx.fillText('Memuat aset...', W / 2, H * 0.36);
 
   const pct = assetsTotal ? assetsLoaded / assetsTotal : 1;
   const bw = 260, bh = 8;
   ctx.fillStyle = 'rgba(60,74,86,0.25)';
-  roundRect(W / 2 - bw / 2, 138, bw, bh, bh / 2);
+  roundRect(W / 2 - bw / 2, H * 0.42, bw, bh, bh / 2);
   ctx.fill();
 
   ctx.fillStyle = '#4c9a63';
-  roundRect(W / 2 - bw / 2, 138, bw * pct, bh, bh / 2);
+  roundRect(W / 2 - bw / 2, H * 0.42, bw * pct, bh, bh / 2);
   ctx.fill();
 }
 
 function drawReadyScreen() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  const cy = GROUND_Y * 0.4;
 
   ctx.fillStyle = 'rgba(60,74,86,0.92)';
   ctx.font = '700 24px "Segoe UI", system-ui, sans-serif';
-  ctx.fillText('TEKAN SPASI ATAU KLIK UNTUK MULAI', W / 2, 108);
+  ctx.fillText('TEKAN SPASI ATAU KLIK UNTUK MULAI', W / 2, cy);
 
   ctx.fillStyle = 'rgba(80,96,110,0.55)';
   ctx.font = '600 14px "Segoe UI", system-ui, sans-serif';
-  ctx.fillText('Hindari pohon  •  Merunduk untuk menghindari burung', W / 2, 142);
+  ctx.fillText('Hindari pohon  •  Merunduk untuk menghindari burung', W / 2, cy + 34);
 }
 
 function drawOverScreen() {
@@ -683,14 +717,15 @@ function drawOverScreen() {
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  const cy = GROUND_Y * 0.4;
 
   ctx.fillStyle = '#37474f';
   ctx.font = '800 42px "Segoe UI", system-ui, sans-serif';
-  ctx.fillText('GAME OVER', W / 2, 92);
+  ctx.fillText('GAME OVER', W / 2, cy);
 
   ctx.fillStyle = '#5c6f7e';
   ctx.font = '600 16px "Segoe UI", system-ui, sans-serif';
-  ctx.fillText('Tekan Spasi / Klik untuk mengulang', W / 2, 138);
+  ctx.fillText('Tekan Spasi / Klik untuk mengulang', W / 2, cy + 46);
 }
 
 /* =====================================================
